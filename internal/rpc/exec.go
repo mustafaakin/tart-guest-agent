@@ -1,3 +1,5 @@
+//go:build !windows
+
 package rpc
 
 import (
@@ -16,7 +18,6 @@ import (
 	"github.com/cirruslabs/tart-guest-agent/pkg/v1"
 	"github.com/creack/pty"
 	"github.com/google/uuid"
-	"github.com/samber/lo"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -25,16 +26,13 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-const (
-	standardStreamsBufferSize = 4096
+const eofChar = 0x04
 
-	eofChar = 0x04
+// ttyEOF ends the input of a program reading from a terminal.
+var ttyEOF = []byte{eofChar}
 
-	// execRuntimeFailureExitCode matches Docker's exit code for runtime failures before a process starts.
-	execRuntimeFailureExitCode = 125
-	// signalExitCodeOffset is the base for shell-style exit codes of processes terminated by signals.
-	signalExitCodeOffset = 128
-)
+// execProcess is what Signal needs to signal a running exec.
+type execProcess = *os.Process
 
 //nolint:gocognit,gocyclo,maintidx // Exec coordinates process startup, bidirectional I/O, and cleanup.
 func (rpc *RPC) Exec(stream grpc.BidiStreamingServer[v1.ExecRequest, v1.ExecResponse]) error {
@@ -382,28 +380,6 @@ func signalProcessGroup(process *os.Process, signal syscall.Signal) error {
 	return nil
 }
 
-func closeStdin(stdin io.WriteCloser, tty bool, closed *bool) error {
-	if stdin == nil || *closed {
-		return nil
-	}
-
-	if tty {
-		// When using pseudo-terminal, we can't simply close the
-		// standard input, as the file descriptor is shared for
-		// standard output and standard error too, so we send
-		// an EOF character instead
-		if _, err := stdin.Write([]byte{eofChar}); err != nil {
-			return err
-		}
-	} else if err := stdin.Close(); err != nil {
-		return err
-	}
-
-	*closed = true
-
-	return nil
-}
-
 func (rpc *RPC) Signal(_ context.Context, request *v1.SignalRequest) (*emptypb.Empty, error) {
 	process, ok := rpc.execs.Load(request.GetExecId())
 	if !ok {
@@ -433,26 +409,6 @@ func (rpc *RPC) Signal(_ context.Context, request *v1.SignalRequest) (*emptypb.E
 	return &emptypb.Empty{}, nil
 }
 
-func sendStartSuccess(stream grpc.BidiStreamingServer[v1.ExecRequest, v1.ExecResponse], execID string) error {
-	return stream.Send(&v1.ExecResponse{
-		Type: &v1.ExecResponse_Started_{
-			Started: &v1.ExecResponse_Started{
-				ExecId: execID,
-			},
-		},
-	})
-}
-
-func sendStartFailure(stream grpc.BidiStreamingServer[v1.ExecRequest, v1.ExecResponse]) error {
-	return stream.Send(&v1.ExecResponse{
-		Type: &v1.ExecResponse_Exit_{
-			Exit: &v1.ExecResponse_Exit{
-				Code: execRuntimeFailureExitCode,
-			},
-		},
-	})
-}
-
 func applyExecOverrides(cmd *exec.Cmd, command *v1.ExecRequest_Command) error {
 	if command.Workdir != "" {
 		cmd.Dir = command.Workdir
@@ -479,41 +435,6 @@ func applyExecOverrides(cmd *exec.Cmd, command *v1.ExecRequest_Command) error {
 	return nil
 }
 
-func mergeEnv(overrides map[string]string) []string {
-	if len(overrides) == 0 {
-		return os.Environ()
-	}
-
-	envMap := make(map[string]string, len(overrides))
-	for _, entry := range os.Environ() {
-		parts := strings.SplitN(entry, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		envMap[parts[0]] = parts[1]
-	}
-
-	for key, value := range overrides {
-		envMap[key] = value
-	}
-
-	merged := make([]string, 0, len(envMap))
-	for key, value := range envMap {
-		merged = append(merged, key+"="+value)
-	}
-
-	return merged
-}
-
-func formatCommandAndArgs(name string, args []string) string {
-	var all []string
-
-	all = append(all, name)
-	all = append(all, args...)
-
-	all = lo.Map(all, func(item string, _ int) string {
-		return fmt.Sprintf("%q", item)
-	})
-
-	return fmt.Sprintf("[%s]", strings.Join(all, ", "))
+func envKey(name string) string {
+	return name
 }

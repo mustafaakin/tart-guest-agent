@@ -8,8 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
-	"golang.org/x/sys/unix"
 )
 
 // ValidateExecWrapper checks the administrator-configured argv prefix.
@@ -38,7 +36,7 @@ func ValidateExecWrapper(argv []string) error {
 	if !info.Mode().IsRegular() {
 		return errors.New("exec wrapper must name an executable file")
 	}
-	if err := unix.Faccessat(unix.AT_FDCWD, argv[0], unix.X_OK, unix.AT_EACCESS); err != nil {
+	if err := checkExecutable(argv[0]); err != nil {
 		return fmt.Errorf("exec wrapper is not executable by the guest agent: %w", err)
 	}
 
