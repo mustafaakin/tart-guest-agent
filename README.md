@@ -58,3 +58,56 @@ executable, configuration, and launch settings under the image administrator's
 control, and choose a wrapper whose behavior remains correct
 under those overrides. Only commands started through the guest agent use this
 prefix.
+
+## Windows guests
+
+On Windows 11 on ARM guests, the agent supports `tart exec`, clipboard sharing and
+`tart ip --resolver=agent`. Disk resizing isn't supported; extend `C:` from inside
+Windows instead, for example with `Resize-Partition`.
+
+Build it with:
+
+```sh
+GOOS=windows GOARCH=arm64 go build -o tart-guest-agent.exe ./cmd
+```
+
+It needs these [virtio-win](https://github.com/virtio-win/virtio-win-pkg-scripts) drivers:
+
+* `viosock` for `--run-rpc`. Its INF also installs the `VirtioSocketWSP` service, which
+  registers the Winsock provider for `AF_VSOCK`. Check that it's running with
+  `Get-Service VirtioSocketWSP`.
+* `vioserial` for `--run-vdagent`, which opens `\\.\Global\com.redhat.spice.0`. Only one
+  process can open that port, so don't also run spice-vdagent from the virtio-win guest tools.
+
+Run the agent in the signed-in user's session rather than as a service: the clipboard
+belongs to that session, and commands started via `tart exec` can then use the desktop.
+In a VM that signs in automatically, a scheduled task that starts at logon works:
+
+```powershell
+$action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\conhost.exe" `
+  -Argument '--headless "C:\Program Files\Tart\tart-guest-agent.exe" --run-agent'
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) `
+  -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
+$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
+Register-ScheduledTask -TaskName "Tart Guest Agent" -Action $action -Trigger $trigger `
+  -Settings $settings -Principal $principal
+```
+
+* `conhost.exe --headless` starts the agent without a console window. Its log output then
+  goes nowhere, so run the agent from a terminal with `--debug` to troubleshoot.
+* `-ExecutionTimeLimit` removes Task Scheduler's default 72-hour limit.
+* `-RunLevel Highest` runs commands elevated. Without it, they run with the user's
+  standard token.
+
+Commands behave as on Unix, with these differences:
+
+* They run as the agent's user; requests to run them as another user fail.
+* TTY sessions use a ConPTY pseudo console.
+* Each command runs in its own job object. Signal requests and canceled commands terminate
+  the whole job immediately, since Windows can't ask an arbitrary process to exit. A signaled
+  command exits with 143 for SIGTERM and 137 for SIGKILL, as on Unix.
+* Detached commands get their own console, outside the agent's job where Windows allows it.
+* `--exec-wrapper` must name an `.exe`, since Windows runs batch files through `cmd.exe`,
+  which would reinterpret the arguments. Windows has no `exec()`, so the wrapper remains the
+  command's parent and shares its job.
