@@ -14,8 +14,6 @@ import (
 	"golang.design/x/clipboard"
 )
 
-const serialPortPath = "/dev/tty.com.redhat.spice.0"
-
 type VDAgent struct {
 	serialPort         *os.File
 	vdi                *vdi.VDI
@@ -23,7 +21,7 @@ type VDAgent struct {
 }
 
 func New() (*VDAgent, error) {
-	sp, err := os.OpenFile(serialPortPath, os.O_RDWR, 0)
+	serialPort, err := openSerialPort()
 	if err != nil {
 		return nil, err
 	}
@@ -33,8 +31,8 @@ func New() (*VDAgent, error) {
 	}
 
 	return &VDAgent{
-		serialPort: sp,
-		vdi:        vdi.New(sp),
+		serialPort: serialPort,
+		vdi:        vdi.New(serialPort),
 	}, nil
 }
 
@@ -160,7 +158,7 @@ func (agent *VDAgent) Run(ctx context.Context) error {
 
 			zap.S().Debugf("I: VD_AGENT_CLIPBOARD: %s", vdAgentClipboard)
 
-			if _, err := clipboard.Write(ctx, clipboard.FmtText, vdAgentClipboard.Data); err != nil {
+			if _, err := clipboard.Write(ctx, clipboard.FmtText, textToGuest(vdAgentClipboard.Data)); err != nil {
 				return fmt.Errorf("failed to write clipboard: %w", err)
 			}
 		case vd.VD_AGENT_CLIPBOARD_REQUEST:
@@ -181,7 +179,7 @@ func (agent *VDAgent) Run(ctx context.Context) error {
 					Selection: vd.VD_AGENT_CLIPBOARD_SELECTION_CLIPBOARD,
 					Type:      vd.VD_AGENT_CLIPBOARD_UTF8_TEXT,
 				},
-				Data: clipboardData,
+				Data: textFromGuest(clipboardData),
 			}
 			ourAgentClipboardBytes, err := ourAgentClipboard.Encode()
 			if err != nil {
