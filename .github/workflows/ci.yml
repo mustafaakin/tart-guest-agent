@@ -45,6 +45,19 @@ jobs:
       - name: Run tests
         run: go test -v ./...
 
+  test-windows:
+    name: Test (Windows)
+    runs-on: windows-11-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run tests
+        run: go test -v ./...
+
   test-macos:
     name: Test (macOS)
     runs-on: macos-26

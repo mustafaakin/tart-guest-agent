@@ -20,7 +20,6 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"golang.org/x/sync/errgroup"
-	"golang.org/x/sys/unix"
 )
 
 var resizeDisk bool
@@ -87,7 +86,12 @@ func run(cmd *cobra.Command, args []string) error {
 	if runtime.GOOS == "darwin" {
 		version, ok := tart.Version()
 		if !ok {
-			return unix.Kill(os.Getppid(), syscall.SIGTERM)
+			parent, err := os.FindProcess(os.Getppid())
+			if err != nil {
+				return err
+			}
+
+			return parent.Signal(syscall.SIGTERM)
 		}
 
 		zap.S().Infof("running on Tart %s, proceeding...", version.String())
